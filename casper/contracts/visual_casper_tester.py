@@ -112,11 +112,7 @@ def saveToDotGraph(G, filename):
     pngname = filename + '.png'
 
     cmd = 'dot -n -Tpng {} > {}'.format(dotname, pngname)
-#     cmd = 'sfdp -x -Goverlap=prism -Tpng {} > {}'.format(dotname, pngname)
-#     cmd = 'sfdp -x -Goverlap=scale -Tpng {} > {}'.format(dotname, pngname)
-    if os.system(cmd) == 0:
-        cmd = 'rm -f {}'.format(dotname)
-        os.system(cmd)
+    os.system(cmd)
 
 # initialize graph
 G=nx.DiGraph()
