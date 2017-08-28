@@ -9,11 +9,12 @@ config_string = ':info,eth.vm.log:trace,eth.vm.op:trace,eth.vm.stack:trace,eth.v
 #configure_logging(config_string=config_string)
 import rlp
 
-# visualization
+# For visualization
 import os
 # import matplotlib.pyplot as plt
 import networkx as nx
 from networkx.drawing.nx_pydot import write_dot
+
 
 alloc = {}
 for i in range(9):
@@ -78,8 +79,10 @@ def induct_validator(casper, key, value):
     assert utils.big_endian_to_int(s.tx(key, purity_checker_address, 0, ct.encode('submit', [valcode_addr]))) == 1
     casper.deposit(valcode_addr, utils.privtoaddr(key), value=value)
 
+# For visualization
 # visualization helper function
 def draw_epoch(n):
+    # Logic to draw the new block with previous block
     if casper.get_main_hash_finalized():
         G.add_node(n-1, color='green', style='filled')
     elif casper.get_main_hash_justified():
@@ -99,6 +102,8 @@ def draw_epoch(n):
     if n != 1:
         G.add_edge(n-1, n, label=msg)
 
+        
+# For visualization
 def saveToDotGraph(G, filename):
     """
     Save a graph to a PNG file.
@@ -130,9 +135,13 @@ print("Epoch initialized")
 # Deposit one validator
 induct_validator(casper, t.k1, 200 * 10**18)
 # Mine two epochs
+
+# For visualization
 draw_epoch(1)
 s.mine(EPOCH_LENGTH * 3 - s.head_state.block_number)
 casper.initialize_epoch(2)
+
+# For visualization
 draw_epoch(2)
 casper.initialize_epoch(3)
 assert casper.get_total_curdyn_deposits() == 200 * 10**18
