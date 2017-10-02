@@ -326,25 +326,25 @@ def proc_reward(validator_index: num, reward: num(wei/m)):
         self.second_next_dynasty_wei_delta -= reward
     
 
-# Process a prepare message
-def prepare(prepare_msg: bytes <= 1024):
+# Process a vote message
+def vote(vote_msg: bytes <= 1024):
     # Get hash for signature, and implicitly assert that it is an RLP list
     # consisting solely of RLP elements
-    sighash = extract32(raw_call(self.sighasher, prepare_msg, gas=200000, outsize=32), 0)
+    sighash = extract32(raw_call(self.sighasher, vote_msg, gas=200000, outsize=32), 0)
     # Extract parameters
-    values = RLPList(prepare_msg, [num, num, bytes32, num, bytes32, bytes])
+    values = RLPList(vote_msg, [num, num, bytes32, num, bytes])
     validator_index = values[0]
     epoch = values[1]
-    ancestry_hash = values[2]
+    checkpoint_hash = values[2]
     source_epoch = values[3]
-    source_ancestry_hash = values[4]
-    sig = values[5]
-    # Hash for purposes of identifying this (epoch, ancestry_hash, source_epoch, source_ancestry_hash) combination
-    sourcing_hash = sha3(concat(as_bytes32(epoch), ancestry_hash, as_bytes32(source_epoch), source_ancestry_hash))
+    sig = values[4]
     # Check the signature
     assert extract32(raw_call(self.validators[validator_index].addr, concat(sighash, sig), gas=500000, outsize=32), 0) == as_bytes32(1)
-    # Check that this prepare has not yet been made
-    assert not bitwise_and(self.consensus_messages[epoch].prepare_bitmap[sourcing_hash][validator_index / 256],
+    # Check that we are in the right epoch
+    assert self.current_epoch == block.number / self.epoch_length
+    assert self.current_epoch == epoch
+    # Check that this vote has not yet been made
+    assert not bitwise_and(self.consensus_messages[epoch].vote_bitmap[checkpoint_hash][validator_index / 256],
                            shift(as_num256(1), validator_index % 256))
     # Check that we are at least (epoch length / 4) blocks into the epoch
     # assert block.number % self.epoch_length >= self.epoch_length / 4
@@ -358,166 +358,117 @@ def prepare(prepare_msg: bytes <= 1024):
     in_current_dynasty = ((ds <= dc) and (dc < de))
     in_prev_dynasty = ((ds <= dp) and (dp < de))
     assert in_current_dynasty or in_prev_dynasty
-    # Check that the prepare is on top of a justified prepare
-    assert self.consensus_messages[source_epoch].ancestry_hash_justified[source_ancestry_hash]
-    # This validator's deposit size
-    # deposit_size = self.validators[validator_index].deposit
-    # Check that we have not yet prepared for this epoch
-    # Pay the reward if the prepare was submitted in time and the prepare is preparing the correct data
-    if (self.current_epoch == epoch and self.ancestry_hashes[epoch] == ancestry_hash) and \
-            (self.expected_source_epoch == source_epoch and self.ancestry_hashes[self.expected_source_epoch] == source_ancestry_hash):
-        reward = floor(self.validators[validator_index].deposit * self.current_penalty_factor * 2)
-        self.proc_reward(validator_index, reward)
-    # Can't prepare for this epoch again
-    self.consensus_messages[epoch].prepare_bitmap[sourcing_hash][validator_index / 256] = \
-        bitwise_or(self.consensus_messages[epoch].prepare_bitmap[sourcing_hash][validator_index / 256],
-                   shift(as_num256(1), validator_index % 256))
-    # self.validators[validator_index].max_prepared = epoch
-    # Record that this prepare took place
-    curdyn_prepares = self.consensus_messages[epoch].cur_dyn_prepares[sourcing_hash]
-    if in_current_dynasty:
-        curdyn_prepares += self.validators[validator_index].deposit
-        self.consensus_messages[epoch].cur_dyn_prepares[sourcing_hash] = curdyn_prepares
-    prevdyn_prepares = self.consensus_messages[epoch].prev_dyn_prepares[sourcing_hash]
-    if in_prev_dynasty:
-        prevdyn_prepares += self.validators[validator_index].deposit
-        self.consensus_messages[epoch].prev_dyn_prepares[sourcing_hash] = prevdyn_prepares
-    # If enough prepares with the same epoch_source and hash are made,
-    # then the hash value is justified for commitment
-    if (curdyn_prepares >= self.total_curdyn_deposits * 2 / 3 and \
-            prevdyn_prepares >= self.total_prevdyn_deposits * 2 / 3) and \
-            not self.consensus_messages[epoch].ancestry_hash_justified[ancestry_hash]:
-        self.consensus_messages[epoch].ancestry_hash_justified[ancestry_hash] = True
-        if ancestry_hash == self.ancestry_hashes[epoch] and epoch == self.current_epoch:
-            self.main_hash_justified = True
-    raw_log([self.prepare_log_topic], prepare_msg)
-
-@constant
-def get_main_hash_prepared_frac() -> decimal:
-    sourcing_hash = sha3(concat(as_bytes32(self.current_epoch),
-                                self.ancestry_hashes[self.current_epoch],
-                                as_bytes32(self.expected_source_epoch),
-                                self.ancestry_hashes[self.expected_source_epoch]))
-    return min(self.consensus_messages[self.current_epoch].cur_dyn_prepares[sourcing_hash] / self.total_curdyn_deposits,
-               self.consensus_messages[self.current_epoch].prev_dyn_prepares[sourcing_hash] / self.total_prevdyn_deposits)
-
-@constant
-def get_main_hash_committed_frac() -> decimal:
-    ancestry_hash = self.ancestry_hashes[self.current_epoch]
-    return min(self.consensus_messages[self.current_epoch].cur_dyn_commits[ancestry_hash] / self.total_curdyn_deposits,
-               self.consensus_messages[self.current_epoch].prev_dyn_commits[ancestry_hash] / self.total_prevdyn_deposits)
-
-# Process a commit message
-def commit(commit_msg: bytes <= 1024):
-    sighash = extract32(raw_call(self.sighasher, commit_msg, gas=200000, outsize=32), 0)
-    # Extract parameters
-    values = RLPList(commit_msg, [num, num, bytes32, num, bytes])
-    validator_index = values[0]
-    epoch = values[1]
-    ancestry_hash = values[2]
-    prev_commit_epoch = values[3]
-    sig = values[4]
-    # Check the signature
-    assert extract32(raw_call(self.validators[validator_index].addr, concat(sighash, sig), gas=500000, outsize=32), 0) == as_bytes32(1)
-    # Check that we are in the right epoch
-    assert self.current_epoch == block.number / self.epoch_length
-    assert self.current_epoch == epoch
-    # Check that we are at least (epoch length / 2) blocks into the epoch
-    # assert block.number % self.epoch_length >= self.epoch_length / 2
-    # Check that the commit is justified
-    assert self.consensus_messages[epoch].ancestry_hash_justified[ancestry_hash]
-    # Check that this validator was active in either the previous dynasty or the current one
-    # Original starting dynasty of the validator; fail if before
-    ds = self.validators[validator_index].dynasty_start
-    # Ending dynasty of the current login period
-    de = self.validators[validator_index].dynasty_end
-    # Dynasty of the prepare
-    dc = self.dynasty_in_epoch[epoch]
-    dp = dc - 1
-    in_current_dynasty = ((ds <= dc) and (dc < de))
-    in_prev_dynasty = ((ds <= dp) and (dp < de))
-    assert in_current_dynasty or in_prev_dynasty
-    # This validator's deposit size
-    # deposit_size = self.validators[validator_index].deposit
-    # Check that we have not yet committed for this epoch
-    assert self.validators[validator_index].prev_commit_epoch == prev_commit_epoch
-    assert prev_commit_epoch < epoch
-    self.validators[validator_index].prev_commit_epoch = epoch
+    # Check that the vote is on top of a justified vote
+    # TODO
+    assert self.consensus_messages[source_epoch].checkpoint_hash_justified[source_ancestry_hash]
+    # Check that we have not yet voted for this epoch
+    # Pay the reward if the vote was submitted in time and preparing the correct data
+    # TODO
+    assert self.validators[validator_index].prev_vote_epoch == prev_vote_epoch
+    assert prev_vote_epoch < epoch
+    self.validators[validator_index].prev_vote_epoch = epoch
     this_validators_deposit = self.validators[validator_index].deposit
     # Pay the reward if the blockhash is correct
-    if ancestry_hash == self.ancestry_hashes[epoch]:
-        reward = floor(self.validators[validator_index].deposit * self.current_penalty_factor)
+    if self.checkpoint_hashes[epoch] == checkpoint_hash:
+    #  and (self.checkpoint_hashes[self.expected_source_epoch] == source_ancestry_hash):
+        reward = floor(self.validators[validator_index].deposit * self.current_penalty_factor * 2)
         self.proc_reward(validator_index, reward)
-    # Can't commit for this epoch again
-    # self.validators[validator_index].max_committed = epoch
-    # Record that this commit took place
+    # Can't vote for this epoch again
+    self.consensus_messages[epoch].vote_bitmap[checkpoint_hash][validator_index / 256] = \
+        bitwise_or(self.consensus_messages[epoch].vote_bitmap[checkpoint_hash][validator_index / 256],
+                   shift(as_num256(1), validator_index % 256))
+    # Record that this vote took place
+    curdyn_votes = self.consensus_messages[epoch].cur_dyn_votes[checkpoint_hash]
     if in_current_dynasty:
-        self.consensus_messages[epoch].cur_dyn_commits[ancestry_hash] += self.validators[validator_index].deposit
+        curdyn_votes += self.validators[validator_index].deposit
+        self.consensus_messages[epoch].cur_dyn_votes[checkpoint_hash] = curdyn_votes
+    prevdyn_votes = self.consensus_messages[epoch].prev_dyn_votes[checkpoint_hash]
     if in_prev_dynasty:
-        self.consensus_messages[epoch].prev_dyn_commits[ancestry_hash] += self.validators[validator_index].deposit
-    # Record if sufficient commits have been made for the block to be finalized
-    if (self.consensus_messages[epoch].cur_dyn_commits[ancestry_hash] >= self.total_curdyn_deposits * 2 / 3 and \
-            self.consensus_messages[epoch].prev_dyn_commits[ancestry_hash] >= self.total_prevdyn_deposits * 2 / 3) and \
-            ((not self.main_hash_finalized) and ancestry_hash == self.ancestry_hashes[epoch]):
+        prevdyn_votes += self.validators[validator_index].deposit
+        self.consensus_messages[epoch].prev_dyn_votes[checkpoint_hash] = prevdyn_votes
+    # If enough votes with the same epoch_source and hash are made,
+    # then the hash value is justified for commitment
+    if (curdyn_votes >= self.total_curdyn_deposits * 2 / 3 \
+        and prevdyn_prepares >= self.total_prevdyn_deposits * 2 / 3) \
+        and not self.consensus_messages[epoch].checkpoint_hash_justified[checkpoint_hash]:
+        self.consensus_messages[epoch].checkpoint_hash_justified[checkpoint_hash] = True
+        if checkpoint_hash == self.checkpoint_hashes[epoch] and epoch == self.current_epoch:
+            self.main_hash_justified = True
+    # Record if sufficient votes have been made for the block to be finalized
+    if (self.consensus_messages[epoch].cur_dyn_votes[checkpoint_hash] >= self.total_curdyn_deposits * 2 / 3 \
+        and self.consensus_messages[epoch].prev_dyn_votes[checkpoint_hash] >= self.total_prevdyn_deposits * 2 / 3) \
+        and ((not self.main_hash_finalized) and checkpoint_hash == self.checkpoint_hashes[epoch]):
         self.main_hash_finalized = True
-    raw_log([self.commit_log_topic], commit_msg)
+    raw_log([self.vote_log_topic], vote_msg)
+
+@constant
+def get_main_hash_voted_frac() -> decimal:
+    checkpoint = self.checkpoint_hashes[self.current_epoch]
+    return min(self.consensus_messages[self.current_epoch].cur_dyn_votes[checkpoint_hash] / self.total_curdyn_deposits,
+               self.consensus_messages[self.current_epoch].prev_dyn_votes[checkpoint_hash] / self.total_prevdyn_deposits)
 
 # Cannot make two prepares in the same epoch
-def double_prepare_slash(prepare1: bytes <= 1000, prepare2: bytes <= 1000):
+def double_vote_slash(vote1: bytes <= 1000, vote2: bytes <= 1000):
     # Get hash for signature, and implicitly assert that it is an RLP list
     # consisting solely of RLP elements
-    sighash1 = extract32(raw_call(self.sighasher, prepare1, gas=200000, outsize=32), 0)
-    sighash2 = extract32(raw_call(self.sighasher, prepare2, gas=200000, outsize=32), 0)
+    sighash1 = extract32(raw_call(self.sighasher, vote1, gas=200000, outsize=32), 0)
+    sighash2 = extract32(raw_call(self.sighasher, vote2, gas=200000, outsize=32), 0)
     # Extract parameters
-    values1 = RLPList(prepare1, [num, num, bytes32, num, bytes32, bytes])
-    values2 = RLPList(prepare2, [num, num, bytes32, num, bytes32, bytes])
+    values1 = RLPList(vote1, [num, num, bytes32, num, bytes])
+    values2 = RLPList(vote2, [num, num, bytes32, num, bytes])
+    # Check that validator is the same
     validator_index = values1[0]
-    epoch1 = values1[1]
-    sig1 = values1[5]
     assert validator_index == values2[0]
+    epoch1 = values1[1]
+    checkpoint_hash1 = values1[2]
+    sig1 = values1[4]
     epoch2 = values2[1]
-    sig2 = values2[5]
+    checkpoint_hash2 = values2[2]
+    sig2 = values2[4]
     # Check the signatures
     assert extract32(raw_call(self.validators[validator_index].addr, concat(sighash1, sig1), gas=500000, outsize=32), 0) == as_bytes32(1)
     assert extract32(raw_call(self.validators[validator_index].addr, concat(sighash2, sig2), gas=500000, outsize=32), 0) == as_bytes32(1)
     # Check that they're from the same epoch
     assert epoch1 == epoch2
+    # Check that the checkpoint hashes are the same
+    assert checkpoint_hash1 == checkpoint_hash2
     # Check that they're not the same message
     assert sighash1 != sighash2
     # Delete the offending validator, and give a 4% "finder's fee"
     validator_deposit = self.get_deposit_size(validator_index)
     send(msg.sender, validator_deposit / 25)
     self.total_destroyed += validator_deposit * 24 / 25
-    #self.total_deposits[self.dynasty] -= (validator_deposit - validator_deposit / 25)
     self.delete_validator(validator_index)
 
-def prepare_commit_inconsistency_slash(prepare_msg: bytes <= 1024, commit_msg: bytes <= 1024):
+def surround_slash(vote1: bytes <= 1024, vote2: bytes <= 1024):
     # Get hash for signature, and implicitly assert that it is an RLP list
     # consisting solely of RLP elements
-    sighash1 = extract32(raw_call(self.sighasher, prepare_msg, gas=200000, outsize=32), 0)
-    sighash2 = extract32(raw_call(self.sighasher, commit_msg, gas=200000, outsize=32), 0)
+    sighash1 = extract32(raw_call(self.sighasher, vote1, gas=200000, outsize=32), 0)
+    sighash2 = extract32(raw_call(self.sighasher, vote2, gas=200000, outsize=32), 0)
     # Extract parameters
-    values1 = RLPList(prepare_msg, [num, num, bytes32, num, bytes32, bytes])
-    values2 = RLPList(commit_msg, [num, num, bytes32, num, bytes])
+    values1 = RLPList(vote1, [num, num, bytes32, num, bytes])
+    values2 = RLPList(vote2, [num, num, bytes32, num, bytes])
+    # Check that validator is the same
     validator_index = values1[0]
-    prepare_epoch = values1[1]
-    prepare_source_epoch = values1[3]
-    sig1 = values1[5]
     assert validator_index == values2[0]
-    commit_epoch = values2[1]
+    vote1_epoch = values1[1]
+    vote1_source = values1[3]
+    sig1 = values1[4]
+    vote2_epoch = values2[1]
+    vote2_source = values2[3]
     sig2 = values2[4]
     # Check the signatures
     assert extract32(raw_call(self.validators[validator_index].addr, concat(sighash1, sig1), gas=500000, outsize=32), 0) == as_bytes32(1)
     assert extract32(raw_call(self.validators[validator_index].addr, concat(sighash2, sig2), gas=500000, outsize=32), 0) == as_bytes32(1)
-    # Check that the prepare refers to something older than the commit
-    assert prepare_source_epoch < commit_epoch
-    # Check that the prepare is newer than the commit
-    assert commit_epoch < prepare_epoch
+    # Check that the vote refers to something older
+    if vote1_epoch > vote2_epoch:
+        assert vote1_source < vote2_source
+    elif vote1_epoch < vote2_epoch:
+        assert vote1_source > vote2_source
     # Delete the offending validator, and give a 4% "finder's fee"
     validator_deposit = self.get_deposit_size(validator_index)
     send(msg.sender, validator_deposit / 25)
     self.total_destroyed += validator_deposit * 24 / 25
-    #self.total_deposits[self.dynasty] -= validator_deposit
     self.delete_validator(validator_index)
 
 # Temporary backdoor for testing purposes (to allow recovering destroyed deposits)
