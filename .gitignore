@@ -3,3 +3,9 @@
 *.pyc
 *.egg-info
 data*
+
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
