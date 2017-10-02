@@ -112,8 +112,8 @@ initialized: bool
 vote_log_topic: bytes32
 
 # Debugging
-latest_npf: public(decimal)
-latest_ncf: public(decimal)
+latest_nvf: public(decimal)
+# latest_ncf: public(decimal)
 latest_resize_factor: public(decimal)
 
 def initiate(# Epoch length, delay in epochs for withdrawing
@@ -147,9 +147,8 @@ def initiate(# Epoch length, delay in epochs for withdrawing
     # Constants that affect interest rates and penalties
     self.base_interest_factor = _base_interest_factor
     self.base_penalty_factor = _base_penalty_factor
-    # Log topics for prepare and commit
-    self.prepare_log_topic = sha3("prepare()")
-    self.commit_log_topic = sha3("commit()")
+    # Log topics for vote
+    self.vote_log_topic = sha3("vote()")
 
 # Called at the start of any epoch
 def initialize_epoch(epoch: num):
@@ -182,29 +181,26 @@ def initialize_epoch(epoch: num):
                                     self.ancestry_hashes[epoch-1],
                                     as_bytes32(self.expected_source_epoch),
                                     self.ancestry_hashes[self.expected_source_epoch]))
-        cur_prepare_frac = self.consensus_messages[epoch - 1].cur_dyn_prepares[sourcing_hash] / self.total_curdyn_deposits
-        prev_prepare_frac = self.consensus_messages[epoch - 1].prev_dyn_prepares[sourcing_hash] / self.total_prevdyn_deposits
-        non_prepare_frac = 1 - min(cur_prepare_frac, prev_prepare_frac)
-        # Fraction that committed
-        cur_commit_frac = self.consensus_messages[epoch - 1].cur_dyn_commits[self.ancestry_hashes[epoch - 1]] / self.total_curdyn_deposits
-        prev_commit_frac = self.consensus_messages[epoch - 1].prev_dyn_commits[self.ancestry_hashes[epoch - 1]]/ self.total_prevdyn_deposits
-        non_commit_frac = 1 - min(cur_commit_frac, prev_commit_frac)
-        # Compute "interest" - base interest minus penalties for not preparing and not committing
-        # If a validator prepares or commits, they pay this, but then get it back when rewarded
-        # as part of the prepare or commit function
+        cur_vote_frac = self.consensus_messages[epoch - 1].cur_dyn_votes[blockhash(epoch - 1)] / self.total_curdyn_deposits
+        prev_vote_frac = self.consensus_messages[epoch - 1].prev_dyn_votes[blockhash(epoch - 1)] / self.total_prevdyn_deposits
+        non_vote_frac = 1 - min(cur_vote_frac, prev_vote_frac)
+        # Compute "interest" - base interest minus penalties for not voting
+        # If a validator votes, they pay this, but then get it back when rewarded
+        # as part of the vote function
+        # TODO:
         if self.main_hash_justified:
-            resize_factor = (1 + BIR) / (1 + BP * (3 + non_prepare_frac / (1 - min(non_prepare_frac,0.5)) + non_commit_frac / (1 - min(non_commit_frac,0.5))))
+            resize_factor = (1 + BIR) / (1 + BP * (3 + non_vote_frac / (1 - min(non_vote_frac,0.5)) + non_commit_frac / (1 - min(non_commit_frac,0.5))))
         else:
-            resize_factor = (1 + BIR) / (1 + BP * (2 + non_prepare_frac / (1 - min(non_prepare_frac,0.5))))
+            resize_factor = (1 + BIR) / (1 + BP * (2 + non_vote_frac / (1 - min(non_vote_frac,0.5))))
     else:
         # If either current or prev dynasty is empty, then pay no interest, and all hashes justify and finalize
         resize_factor = 1
         self.main_hash_justified = True
-        self.consensus_messages[epoch - 1].ancestry_hash_justified[self.ancestry_hashes[epoch-1]] = True
+        self.consensus_messages[epoch - 1].checkpoint_hash_justified[self.checkpoint_hashes[epoch-1]] = True
         self.main_hash_finalized = True
     # Debugging
-    self.latest_npf = non_prepare_frac
-    self.latest_ncf = non_commit_frac
+    self.latest_nvf = non_vote_frac
+    # self.latest_ncf = non_commit_frac
     self.latest_resize_factor = resize_factor
     # Set the epoch number
     self.current_epoch = epoch
@@ -219,8 +215,8 @@ def initialize_epoch(epoch: num):
         self.second_next_dynasty_wei_delta = 0
         self.dynasty_start_epoch[self.dynasty] = epoch
     self.dynasty_in_epoch[epoch] = self.dynasty
-    # Compute new ancestry hash, as well as expected source epoch and hash
-    self.ancestry_hashes[epoch] = sha3(concat(self.ancestry_hashes[epoch - 1], blockhash(epoch * self.epoch_length - 1)))
+    # Compute new checkpoint hash, as well as expected source epoch and hash
+    self.checkpoint_hashes[epoch] = sha3(concat(self.checkpoint_hashes[epoch - 1], blockhash(epoch * self.epoch_length - 1)))
     if self.main_hash_justified:
         self.expected_source_epoch = epoch - 1
     self.main_hash_justified = False
@@ -302,18 +298,15 @@ def withdraw(validator_index: num):
     send(self.validators[validator_index].withdrawal_addr, withdraw_amount)
     self.delete_validator(validator_index)
 
-# Helper functions that clients can call to know what to prepare and commit
+# Helper functions that clients can call to know what to vote
 @constant
-def get_recommended_ancestry_hash() -> bytes32:
-    return self.ancestry_hashes[self.current_epoch]
+def get_recommended_checkpoint_hash() -> bytes32:
+    return self.checkpoint_hashes[self.current_epoch]
 
 @constant
 def get_recommended_source_epoch() -> num:
     return self.expected_source_epoch
 
-@constant
-def get_recommended_source_ancestry_hash() -> bytes32:
-    return self.ancestry_hashes[self.expected_source_epoch]
 
 # Reward the given validator, and reflect this in total deposit figured
 def proc_reward(validator_index: num, reward: num(wei/m)):
