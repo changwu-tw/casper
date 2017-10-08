@@ -408,27 +408,25 @@ def double_vote_slash(vote1: bytes <= 1000, vote2: bytes <= 1000):
     # consisting solely of RLP elements
     sighash1 = extract32(raw_call(self.sighasher, vote1, gas=200000, outsize=32), 0)
     sighash2 = extract32(raw_call(self.sighasher, vote2, gas=200000, outsize=32), 0)
+    # Check that they're not the same message
+    assert sighash1 != sighash2
     # Extract parameters
     values1 = RLPList(vote1, [num, num, bytes32, num, bytes])
     values2 = RLPList(vote2, [num, num, bytes32, num, bytes])
     # Check that validator is the same
     validator_index = values1[0]
     assert validator_index == values2[0]
+    # Check that they're from the same epoch
     epoch1 = values1[1]
+    assert epoch1 == values2[1]
+    # Check that the checkpoint hashes are different
     checkpoint_hash1 = values1[2]
-    sig1 = values1[4]
-    epoch2 = values2[1]
-    checkpoint_hash2 = values2[2]
-    sig2 = values2[4]
+    assert checkpoint_hash1 != values2[2]
     # Check the signatures
+    sig1 = values1[4]
+    sig2 = values2[4]
     assert extract32(raw_call(self.validators[validator_index].addr, concat(sighash1, sig1), gas=500000, outsize=32), 0) == as_bytes32(1)
     assert extract32(raw_call(self.validators[validator_index].addr, concat(sighash2, sig2), gas=500000, outsize=32), 0) == as_bytes32(1)
-    # Check that they're from the same epoch
-    assert epoch1 == epoch2
-    # Check that the checkpoint hashes are the same
-    assert checkpoint_hash1 == checkpoint_hash2
-    # Check that they're not the same message
-    assert sighash1 != sighash2
     # Delete the offending validator, and give a 4% "finder's fee"
     validator_deposit = self.get_deposit_size(validator_index)
     send(msg.sender, validator_deposit / 25)
@@ -440,6 +438,8 @@ def surround_slash(vote1: bytes <= 1024, vote2: bytes <= 1024):
     # consisting solely of RLP elements
     sighash1 = extract32(raw_call(self.sighasher, vote1, gas=200000, outsize=32), 0)
     sighash2 = extract32(raw_call(self.sighasher, vote2, gas=200000, outsize=32), 0)
+    # Check that they're not the same message
+    assert sighash1 != sighash2
     # Extract parameters
     values1 = RLPList(vote1, [num, num, bytes32, num, bytes])
     values2 = RLPList(vote2, [num, num, bytes32, num, bytes])
@@ -447,10 +447,10 @@ def surround_slash(vote1: bytes <= 1024, vote2: bytes <= 1024):
     validator_index = values1[0]
     assert validator_index == values2[0]
     vote1_epoch = values1[1]
-    vote1_source = values1[3]
-    sig1 = values1[4]
     vote2_epoch = values2[1]
+    vote1_source = values1[3]
     vote2_source = values2[3]
+    sig1 = values1[4]
     sig2 = values2[4]
     # Check the signatures
     assert extract32(raw_call(self.validators[validator_index].addr, concat(sighash1, sig1), gas=500000, outsize=32), 0) == as_bytes32(1)
