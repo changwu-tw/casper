@@ -11,8 +11,8 @@ validators: public({
     addr: address,
     # Addess to withdraw to
     withdrawal_addr: address,
-    # Previous epoch in which this validator committed
-    prev_commit_epoch: num
+    # Previous epoch in which this validator voted
+    prev_vote_epoch: num
 }[num])
 
 # Number of validators
@@ -41,7 +41,7 @@ dynasty_in_epoch: public(num[num])
 
 # Information for use in processing cryptoeconomic commitments
 consensus_messages: public({
-    # How many votes are there for this hash (hash of message hash + view source) from the current dynasty
+    # How many votes are there for this hash from the current dynasty
     cur_dyn_votes: decimal(wei / m)[bytes32],
     # Bitmap of which validator IDs have already voted
     vote_bitmap: num256[num][bytes32],
@@ -78,7 +78,8 @@ last_finalized_epoch: public(num)
 # Last justified epoch
 last_justified_epoch: public(num)
 
-# Expected source epoch for a prepare
+# TODO
+# Expected source epoch for a vote
 expected_source_epoch: public(num)
 
 # Can withdraw destroyed deposits
@@ -93,7 +94,7 @@ sighasher: address
 # Purity checker library address
 purity_checker: address
 
-# Reward for preparing or committing, as fraction of deposit size
+# Reward for vote, as fraction of deposit size
 reward_factor: public(decimal)
 
 # Base interest factor
@@ -108,7 +109,7 @@ current_penalty_factor: public(decimal)
 # Have I already been initialized?
 initialized: bool
 
-# Log topic for prepare
+# Log topic for vote
 vote_log_topic: bytes32
 
 # Debugging
@@ -117,11 +118,11 @@ latest_nvf: public(decimal)
 latest_resize_factor: public(decimal)
 
 def initiate(# Epoch length, delay in epochs for withdrawing
-            _epoch_length: num, _withdrawal_delay: num,
-            # Owner (backdoor), sig hash calculator, purity checker
-            _owner: address, _sighasher: address, _purity_checker: address,
-            # Base interest and base penalty factors
-            _base_interest_factor: decimal, _base_penalty_factor: decimal):
+             _epoch_length: num, _withdrawal_delay: num,
+             # Owner (backdoor), sig hash calculator, purity checker
+             _owner: address, _sighasher: address, _purity_checker: address,
+             # Base interest and base penalty factors
+             _base_interest_factor: decimal, _base_penalty_factor: decimal):
     assert not self.initialized
     self.initialized = True
     # Epoch length
@@ -140,7 +141,6 @@ def initiate(# Epoch length, delay in epochs for withdrawing
     self.sighasher = _sighasher
     # Set the purity checker address
     self.purity_checker = _purity_checker
-    # self.consensus_messages[0].committed = True
     # Set initial total deposit counter
     self.total_curdyn_deposits = 0
     self.total_prevdyn_deposits = 0
@@ -176,31 +176,26 @@ def initialize_epoch(epoch: num):
     self.current_penalty_factor = BP
     # Calculate interest rate for this epoch
     if self.total_curdyn_deposits > 0 and self.total_prevdyn_deposits > 0:
-        # Fraction that prepared
-        sourcing_hash = sha3(concat(as_bytes32(epoch-1),
-                                    self.ancestry_hashes[epoch-1],
-                                    as_bytes32(self.expected_source_epoch),
-                                    self.ancestry_hashes[self.expected_source_epoch]))
-        cur_vote_frac = self.consensus_messages[epoch - 1].cur_dyn_votes[blockhash(epoch - 1)] / self.total_curdyn_deposits
-        prev_vote_frac = self.consensus_messages[epoch - 1].prev_dyn_votes[blockhash(epoch - 1)] / self.total_prevdyn_deposits
+        # Fraction that voted
+        # TODO
+        cur_vote_frac = self.consensus_messages[epoch - 1].cur_dyn_votes[self.checkpoint_hashes[epoch - 1] / self.total_curdyn_deposits
+        prev_vote_frac = self.consensus_messages[epoch - 1].prev_dyn_votes[self.checkpoint_hashes[epoch - 1] / self.total_prevdyn_deposits
         non_vote_frac = 1 - min(cur_vote_frac, prev_vote_frac)
         # Compute "interest" - base interest minus penalties for not voting
         # If a validator votes, they pay this, but then get it back when rewarded
         # as part of the vote function
-        # TODO:
         if self.main_hash_justified:
-            resize_factor = (1 + BIR) / (1 + BP * (3 + non_vote_frac / (1 - min(non_vote_frac,0.5)) + non_commit_frac / (1 - min(non_commit_frac,0.5))))
+            resize_factor = (1 + BIR) / (1 + BP * (3 + non_vote_frac / (1 - min(non_vote_frac, 0.5))))
         else:
-            resize_factor = (1 + BIR) / (1 + BP * (2 + non_vote_frac / (1 - min(non_vote_frac,0.5))))
+            resize_factor = (1 + BIR) / (1 + BP * (2 + non_vote_frac / (1 - min(non_vote_frac, 0.5))))
     else:
         # If either current or prev dynasty is empty, then pay no interest, and all hashes justify and finalize
         resize_factor = 1
         self.main_hash_justified = True
-        self.consensus_messages[epoch - 1].checkpoint_hash_justified[self.checkpoint_hashes[epoch-1]] = True
         self.main_hash_finalized = True
+        self.consensus_messages[epoch - 1].checkpoint_hash_justified[self.checkpoint_hashes[epoch - 1]] = True
     # Debugging
     self.latest_nvf = non_vote_frac
-    # self.latest_ncf = non_commit_frac
     self.latest_resize_factor = resize_factor
     # Set the epoch number
     self.current_epoch = epoch
@@ -215,8 +210,6 @@ def initialize_epoch(epoch: num):
         self.second_next_dynasty_wei_delta = 0
         self.dynasty_start_epoch[self.dynasty] = epoch
     self.dynasty_in_epoch[epoch] = self.dynasty
-    # Compute new checkpoint hash, as well as expected source epoch and hash
-    self.checkpoint_hashes[epoch] = sha3(concat(self.checkpoint_hashes[epoch - 1], blockhash(epoch * self.epoch_length - 1)))
     if self.main_hash_justified:
         self.expected_source_epoch = epoch - 1
     self.main_hash_justified = False
@@ -233,7 +226,7 @@ def deposit(validation_addr: address, withdrawal_addr: address):
         dynasty_end: 1000000000000000000000000000000,
         addr: validation_addr,
         withdrawal_addr: withdrawal_addr,
-        prev_commit_epoch: 0,
+        prev_vote_epoch: 0,
     }
     self.nextValidatorIndex += 1
     self.second_next_dynasty_wei_delta += msg.value / self.deposit_scale_factor[self.current_epoch]
@@ -251,7 +244,6 @@ def logout(logout_msg: bytes <= 1024):
     validator_index = values[0]
     epoch = values[1]
     sig = values[2]
-    assert self.current_epoch == epoch
     # Signature check
     assert extract32(raw_call(self.validators[validator_index].addr, concat(sighash, sig), gas=500000, outsize=32), 0) == as_bytes32(1)
     # Check that we haven't already withdrawn
@@ -284,7 +276,7 @@ def delete_validator(validator_index: num):
         dynasty_end: 0,
         addr: None,
         withdrawal_addr: None,
-        prev_commit_epoch: 0,
+        prev_vote_epoch: 0,
     }
 
 # Withdraw deposited ether
@@ -302,10 +294,6 @@ def withdraw(validator_index: num):
 @constant
 def get_recommended_checkpoint_hash() -> bytes32:
     return self.checkpoint_hashes[self.current_epoch]
-
-@constant
-def get_recommended_source_epoch() -> num:
-    return self.expected_source_epoch
 
 
 # Reward the given validator, and reflect this in total deposit figured
@@ -335,19 +323,26 @@ def vote(vote_msg: bytes <= 1024):
     values = RLPList(vote_msg, [num, num, bytes32, num, bytes])
     validator_index = values[0]
     epoch = values[1]
-    checkpoint_hash = values[2]
+    vote_hash = values[2]
     source_epoch = values[3]
     sig = values[4]
     # Check the signature
     assert extract32(raw_call(self.validators[validator_index].addr, concat(sighash, sig), gas=500000, outsize=32), 0) == as_bytes32(1)
     # Check that we are in the right epoch
-    assert self.current_epoch == block.number / self.epoch_length
-    assert self.current_epoch == epoch
+    assert epoch <= self.current_epoch
+    assert epoch <= block.number / self.epoch_length
+    # Check that the source epoch is before the epoch
+    assert source_epoch < epoch
+    # Check that the checkpoint hash is correct
+    assert self.checkpoint_hashes[epoch] == vote_hash
+    # Check source hash is justified
+    assert checkpoint_hashes: public(bytes32[num]bool[num])
+    
+    
+    source_epoch  == vote_hash
     # Check that this vote has not yet been made
     assert not bitwise_and(self.consensus_messages[epoch].vote_bitmap[checkpoint_hash][validator_index / 256],
                            shift(as_num256(1), validator_index % 256))
-    # Check that we are at least (epoch length / 4) blocks into the epoch
-    # assert block.number % self.epoch_length >= self.epoch_length / 4
     # Original starting dynasty of the validator; fail if before
     ds = self.validators[validator_index].dynasty_start
     # Ending dynasty of the current login period
@@ -359,7 +354,7 @@ def vote(vote_msg: bytes <= 1024):
     in_prev_dynasty = ((ds <= dp) and (dp < de))
     assert in_current_dynasty or in_prev_dynasty
     # Check that the vote is on top of a justified vote
-    # TODO
+    # TODO check hash is justified
     assert self.consensus_messages[source_epoch].checkpoint_hash_justified[source_ancestry_hash]
     # Check that we have not yet voted for this epoch
     # Pay the reward if the vote was submitted in time and preparing the correct data
