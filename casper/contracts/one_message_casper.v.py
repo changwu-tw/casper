@@ -210,6 +210,8 @@ def initialize_epoch(epoch: num):
         self.second_next_dynasty_wei_delta = 0
         self.dynasty_start_epoch[self.dynasty] = epoch
     self.dynasty_in_epoch[epoch] = self.dynasty
+    # Set the checkpoint hash for this epoch
+    self.checkpoint_hashes[epoch] = blockhash(epoch * self.epoch_length - 1)
     if self.main_hash_justified:
         self.expected_source_epoch = epoch - 1
     self.main_hash_justified = False
@@ -335,11 +337,6 @@ def vote(vote_msg: bytes <= 1024):
     assert source_epoch < epoch
     # Check that the checkpoint hash is correct
     assert self.checkpoint_hashes[epoch] == vote_hash
-    # Check source hash is justified
-    assert checkpoint_hashes: public(bytes32[num]bool[num])
-    
-    
-    source_epoch  == vote_hash
     # Check that this vote has not yet been made
     assert not bitwise_and(self.consensus_messages[epoch].vote_bitmap[checkpoint_hash][validator_index / 256],
                            shift(as_num256(1), validator_index % 256))
@@ -347,7 +344,7 @@ def vote(vote_msg: bytes <= 1024):
     ds = self.validators[validator_index].dynasty_start
     # Ending dynasty of the current login period
     de = self.validators[validator_index].dynasty_end
-    # Dynasty of the prepare
+    # Dynasty of the vote
     dc = self.dynasty_in_epoch[epoch]
     dp = dc - 1
     in_current_dynasty = ((ds <= dc) and (dc < de))
@@ -357,10 +354,8 @@ def vote(vote_msg: bytes <= 1024):
     # TODO check hash is justified
     assert self.consensus_messages[source_epoch].checkpoint_hash_justified[source_ancestry_hash]
     # Check that we have not yet voted for this epoch
-    # Pay the reward if the vote was submitted in time and preparing the correct data
-    # TODO
-    assert self.validators[validator_index].prev_vote_epoch == prev_vote_epoch
-    assert prev_vote_epoch < epoch
+    # Pay the reward if the vote was submitted in time with the correct data
+    assert self.validators[validator_index].prev_vote_epoch == source_epoch
     self.validators[validator_index].prev_vote_epoch = epoch
     this_validators_deposit = self.validators[validator_index].deposit
     # Pay the reward if the blockhash is correct
@@ -373,15 +368,15 @@ def vote(vote_msg: bytes <= 1024):
         bitwise_or(self.consensus_messages[epoch].vote_bitmap[checkpoint_hash][validator_index / 256],
                    shift(as_num256(1), validator_index % 256))
     # Record that this vote took place
-    curdyn_votes = self.consensus_messages[epoch].cur_dyn_votes[checkpoint_hash]
+    curdyn_votes = self.consensus_messages[epoch].cur_dyn_votes[vote_hash]
     if in_current_dynasty:
         curdyn_votes += self.validators[validator_index].deposit
-        self.consensus_messages[epoch].cur_dyn_votes[checkpoint_hash] = curdyn_votes
-    prevdyn_votes = self.consensus_messages[epoch].prev_dyn_votes[checkpoint_hash]
+        self.consensus_messages[epoch].cur_dyn_votes[vote_hash] = curdyn_votes
+    prevdyn_votes = self.consensus_messages[epoch].prev_dyn_votes[vote_hash]
     if in_prev_dynasty:
         prevdyn_votes += self.validators[validator_index].deposit
-        self.consensus_messages[epoch].prev_dyn_votes[checkpoint_hash] = prevdyn_votes
-    # If enough votes with the same epoch_source and hash are made,
+        self.consensus_messages[epoch].prev_dyn_votes[vote_hash] = prevdyn_votes
+    # If enough votes with the same epoch_source are made,
     # then the hash value is justified for commitment
     if (curdyn_votes >= self.total_curdyn_deposits * 2 / 3 \
         and prevdyn_prepares >= self.total_prevdyn_deposits * 2 / 3) \
