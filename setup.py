@@ -37,15 +37,15 @@ check_setuptools_features()
 # requirements
 install_requires = set(x.strip() for x in open('requirements.txt'))
 install_requires_replacements = {
-    # 'https://github.com/ethereum/pyrlp/tarball/develop/': 'rlp',
-    # 'https://github.com/ethereum/pyethereum/tarball/develop': 'ethereum',
+    'https://github.com/ethereum/serpent/tarball/develop': 'ethereum-serpent',
+    'https://github.com/ethereum/viper/tarball/master': 'viper',
 }
 install_requires = [install_requires_replacements.get(r, r) for r in install_requires]
 
 # dependency links
 dependency_links = [
-    # 'https://github.com/ethereum/pyrlp/tarball/develop/#egg=rlp-9.99.9',
-    # 'https://github.com/ethereum/pyethereum/tarball/develop#egg=ethereum-9.99.9'
+    'https://github.com/ethereum/serpent/tarball/develop#egg=ethereum-serpent-9.99.9',
+    'https://github.com/ethereum/viper/tarball/master/#egg=viper-9.99.9',
 ]
 
 # *IMPORTANT*: Don't manually change the version here. Use the 'bumpversion' utility.

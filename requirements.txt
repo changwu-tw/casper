@@ -1,3 +1,6 @@
-rlp>=0.5.1
+ethereum
+future
 pycryptodome==3.4.6
-ethereum==2.0.5
+rlp>=0.5.1
+https://github.com/ethereum/serpent/tarball/develop
+https://github.com/ethereum/viper/tarball/master
