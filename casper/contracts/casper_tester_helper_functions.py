@@ -29,7 +29,8 @@ viper_rlp_decoder_address = viper_rlp_decoder_tx.creates
 sig_hasher_address = sig_hasher_tx.creates
 
 # casper contract
-contract_path = os.path.join(os.path.dirname(__file__), 'simple_casper.v.py')
+# contract_path = os.path.join(os.path.dirname(__file__), 'simple_casper.v.py')
+contract_path = os.path.join(os.path.dirname(__file__), 'one_message_casper.v.py')
 casper_code = open(contract_path).read()
 casper_bytecode = compiler.compile(casper_code)
 casper_abi = compiler.mk_full_signature(casper_code)
@@ -108,6 +109,5 @@ def new_epoch(chain, casper, epoch_length):
             current_epoch, casper.get_current_penalty_factor()))
     return (casper.get_dynasty(),
             casper.get_current_epoch(),
-            casper.get_recommended_ancestry_hash(),
-            casper.get_recommended_source_epoch(),
-            casper.get_recommended_source_ancestry_hash())
+            casper.get_recommended_checkpoint_hash(),
+            casper.get_recommended_source_epoch())
