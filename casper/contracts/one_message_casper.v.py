@@ -365,7 +365,7 @@ def vote(vote_msg: bytes <= 1024):
     if in_current_dynasty:
         curdyn_votes += self.validators[validator_index].deposit
         self.consensus_messages[epoch].cur_dyn_votes[vote_hash] = curdyn_votes
-    prevdyn_votes = self.consensus_messages[epoch].prev_dyn_votes[vote_hash]
+    prevdyn_votes = self.consensus_messages[epoch].prev_dyn_prepares[vote_hash]
     if in_prev_dynasty:
         prevdyn_votes += self.validators[validator_index].deposit
         self.consensus_messages[epoch].prev_dyn_votes[vote_hash] = prevdyn_votes
