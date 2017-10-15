@@ -78,10 +78,6 @@ last_finalized_epoch: public(num)
 # Last justified epoch
 last_justified_epoch: public(num)
 
-# TODO
-# Expected source epoch for a vote
-expected_source_epoch: public(num)
-
 # Can withdraw destroyed deposits
 owner: address
 
@@ -116,6 +112,10 @@ vote_log_topic: bytes32
 latest_nvf: public(decimal)
 # latest_ncf: public(decimal)
 latest_resize_factor: public(decimal)
+
+# the epoch where the current epoch is referred is justified
+# ex: epoch_justified_links[epoch][source] = True
+epoch_justified_links: bool[num][num]
 
 def initiate(# Epoch length, delay in epochs for withdrawing
              _epoch_length: num, _withdrawal_delay: num,
@@ -177,9 +177,8 @@ def initialize_epoch(epoch: num):
     # Calculate interest rate for this epoch
     if self.total_curdyn_deposits > 0 and self.total_prevdyn_deposits > 0:
         # Fraction that voted
-        # TODO
-        cur_vote_frac = self.consensus_messages[epoch - 1].cur_dyn_votes[self.checkpoint_hashes[epoch - 1] / self.total_curdyn_deposits
-        prev_vote_frac = self.consensus_messages[epoch - 1].prev_dyn_votes[self.checkpoint_hashes[epoch - 1] / self.total_prevdyn_deposits
+        cur_vote_frac = self.consensus_messages[epoch - 1].cur_dyn_votes[self.checkpoint_hashes[epoch - 1]] / self.total_curdyn_deposits
+        prev_vote_frac = self.consensus_messages[epoch - 1].prev_dyn_votes[self.checkpoint_hashes[epoch - 1]] / self.total_prevdyn_deposits
         non_vote_frac = 1 - min(cur_vote_frac, prev_vote_frac)
         # Compute "interest" - base interest minus penalties for not voting
         # If a validator votes, they pay this, but then get it back when rewarded
@@ -212,8 +211,6 @@ def initialize_epoch(epoch: num):
     self.dynasty_in_epoch[epoch] = self.dynasty
     # Set the checkpoint hash for this epoch
     self.checkpoint_hashes[epoch] = blockhash(epoch * self.epoch_length - 1)
-    if self.main_hash_justified:
-        self.expected_source_epoch = epoch - 1
     self.main_hash_justified = False
     self.main_hash_finalized = False
 
@@ -254,7 +251,7 @@ def logout(logout_msg: bytes <= 1024):
     self.validators[validator_index].dynasty_end = self.dynasty + 2
     self.second_next_dynasty_wei_delta -= self.validators[validator_index].deposit
 
-# Gets the current deposit size
+# Gets validator's current deposit size
 @constant
 def get_deposit_size(validator_index: num) -> num(wei):
     return floor(self.validators[validator_index].deposit * self.deposit_scale_factor[self.current_epoch])
@@ -338,7 +335,7 @@ def vote(vote_msg: bytes <= 1024):
     # Check that the checkpoint hash is correct
     assert self.checkpoint_hashes[epoch] == vote_hash
     # Check that this vote has not yet been made
-    assert not bitwise_and(self.consensus_messages[epoch].vote_bitmap[checkpoint_hash][validator_index / 256],
+    assert not bitwise_and(self.consensus_messages[epoch].vote_bitmap[vote_hash][validator_index / 256],
                            shift(as_num256(1), validator_index % 256))
     # Original starting dynasty of the validator; fail if before
     ds = self.validators[validator_index].dynasty_start
@@ -350,24 +347,20 @@ def vote(vote_msg: bytes <= 1024):
     in_current_dynasty = ((ds <= dc) and (dc < de))
     in_prev_dynasty = ((ds <= dp) and (dp < de))
     assert in_current_dynasty or in_prev_dynasty
-    # Check that the vote is on top of a justified vote
-    # TODO check hash is justified
-    assert self.consensus_messages[source_epoch].checkpoint_hash_justified[source_ancestry_hash]
-    # Check that we have not yet voted for this epoch
     # Pay the reward if the vote was submitted in time with the correct data
-    assert self.validators[validator_index].prev_vote_epoch == source_epoch
-    self.validators[validator_index].prev_vote_epoch = epoch
-    this_validators_deposit = self.validators[validator_index].deposit
-    # Pay the reward if the blockhash is correct
-    if self.checkpoint_hashes[epoch] == checkpoint_hash:
-    #  and (self.checkpoint_hashes[self.expected_source_epoch] == source_ancestry_hash):
+    if self.epoch_justified_links[epoch][source_epoch] == True:
         reward = floor(self.validators[validator_index].deposit * self.current_penalty_factor * 2)
         self.proc_reward(validator_index, reward)
+        # Pay the reward if the checkpoint hash got finalized
+        if self.epoch_justified_links[source_epoch][source_epoch - 1] == True:
+            reward = floor(self.validators[validator_index].deposit * self.current_penalty_factor)
+            self.proc_reward(validator_index, reward)
     # Can't vote for this epoch again
-    self.consensus_messages[epoch].vote_bitmap[checkpoint_hash][validator_index / 256] = \
-        bitwise_or(self.consensus_messages[epoch].vote_bitmap[checkpoint_hash][validator_index / 256],
-                   shift(as_num256(1), validator_index % 256))
+    self.consensus_messages[epoch].vote_bitmap[vote_hash][validator_index / 256] = \
+        bitwise_or(self.consensus_messages[epoch].vote_bitmap[vote_hash][validator_index / 256],
+            shift(as_num256(1), validator_index % 256))
     # Record that this vote took place
+    self.validators[validator_index].prev_vote_epoch = epoch
     curdyn_votes = self.consensus_messages[epoch].cur_dyn_votes[vote_hash]
     if in_current_dynasty:
         curdyn_votes += self.validators[validator_index].deposit
@@ -376,24 +369,25 @@ def vote(vote_msg: bytes <= 1024):
     if in_prev_dynasty:
         prevdyn_votes += self.validators[validator_index].deposit
         self.consensus_messages[epoch].prev_dyn_votes[vote_hash] = prevdyn_votes
-    # If enough votes with the same epoch_source are made,
-    # then the hash value is justified for commitment
-    if (curdyn_votes >= self.total_curdyn_deposits * 2 / 3 \
-        and prevdyn_prepares >= self.total_prevdyn_deposits * 2 / 3) \
-        and not self.consensus_messages[epoch].checkpoint_hash_justified[checkpoint_hash]:
-        self.consensus_messages[epoch].checkpoint_hash_justified[checkpoint_hash] = True
-        if checkpoint_hash == self.checkpoint_hashes[epoch] and epoch == self.current_epoch:
+    # If enough votes with the same source_epoch and hash are made,
+    # then the hash value is justified for vote
+    if (curdyn_votes >= self.total_curdyn_deposits * 2 / 3 and \
+            prevdyn_votes >= self.total_prevdyn_deposits * 2 / 3) and \
+            not self.consensus_messages[epoch].checkpoint_hash_justified[vote_hash]:
+        self.consensus_messages[epoch].checkpoint_hash_justified[vote_hash] = True
+        if epoch == self.current_epoch:
             self.main_hash_justified = True
-    # Record if sufficient votes have been made for the block to be finalized
-    if (self.consensus_messages[epoch].cur_dyn_votes[checkpoint_hash] >= self.total_curdyn_deposits * 2 / 3 \
-        and self.consensus_messages[epoch].prev_dyn_votes[checkpoint_hash] >= self.total_prevdyn_deposits * 2 / 3) \
-        and ((not self.main_hash_finalized) and checkpoint_hash == self.checkpoint_hashes[epoch]):
-        self.main_hash_finalized = True
+            self.epoch_justified_links[epoch][source_epoch] = True
+            if ((not self.main_hash_finalized and source_epoch == epoch - 1) and \
+                    self.last_justified_epoch == source_epoch):
+                self.main_hash_finalized = True
+                self.last_finalized_epoch = epoch
+            self.last_justified_epoch = epoch
     raw_log([self.vote_log_topic], vote_msg)
 
 @constant
 def get_main_hash_voted_frac() -> decimal:
-    checkpoint = self.checkpoint_hashes[self.current_epoch]
+    checkpoint_hash = self.checkpoint_hashes[self.current_epoch]
     return min(self.consensus_messages[self.current_epoch].cur_dyn_votes[checkpoint_hash] / self.total_curdyn_deposits,
                self.consensus_messages[self.current_epoch].prev_dyn_votes[checkpoint_hash] / self.total_prevdyn_deposits)
 
