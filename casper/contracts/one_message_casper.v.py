@@ -78,6 +78,9 @@ last_finalized_epoch: public(num)
 # Last justified epoch
 last_justified_epoch: public(num)
 
+# Expected source epoch for a prepare
+expected_source_epoch: public(num)
+
 # Can withdraw destroyed deposits
 owner: address
 
@@ -211,6 +214,8 @@ def initialize_epoch(epoch: num):
     self.dynasty_in_epoch[epoch] = self.dynasty
     # Set the checkpoint hash for this epoch
     self.checkpoint_hashes[epoch] = blockhash(epoch * self.epoch_length - 1)
+    if self.main_hash_justified:
+        self.expected_source_epoch = epoch - 1
     self.main_hash_justified = False
     self.main_hash_finalized = False
 
@@ -294,6 +299,9 @@ def withdraw(validator_index: num):
 def get_recommended_checkpoint_hash() -> bytes32:
     return self.checkpoint_hashes[self.current_epoch]
 
+@constant
+def get_recommended_source_epoch() -> num:
+    return self.expected_source_epoch
 
 # Reward the given validator, and reflect this in total deposit figured
 def proc_reward(validator_index: num, reward: num(wei/m)):
@@ -365,7 +373,7 @@ def vote(vote_msg: bytes <= 1024):
     if in_current_dynasty:
         curdyn_votes += self.validators[validator_index].deposit
         self.consensus_messages[epoch].cur_dyn_votes[vote_hash] = curdyn_votes
-    prevdyn_votes = self.consensus_messages[epoch].prev_dyn_prepares[vote_hash]
+    prevdyn_votes = self.consensus_messages[epoch].prev_dyn_votes[vote_hash]
     if in_prev_dynasty:
         prevdyn_votes += self.validators[validator_index].deposit
         self.consensus_messages[epoch].prev_dyn_votes[vote_hash] = prevdyn_votes
