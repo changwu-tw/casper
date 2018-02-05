@@ -1,9 +1,9 @@
 from ethereum.tools import tester as t
-from ethereum import utils, common, transactions, abi
+from ethereum import utils, common, transactions, abi, genesis_helpers
+from ethereum.hybrid_casper import casper_utils
 from casper_tester_helper_functions import mk_initializers, casper_config, new_epoch, custom_chain, \
     viper_rlp_decoder_address, sig_hasher_address, purity_checker_address, casper_abi, purity_checker_abi
 from viper import compiler
-import serpent
 from ethereum.slogging import LogRecorder, configure_logging, set_level
 config_string = ':info,eth.vm.log:trace,eth.vm.op:trace,eth.vm.stack:trace,eth.vm.exit:trace,eth.pb.msg:trace,eth.pb.tx:debug'
 #configure_logging(config_string=config_string)
@@ -13,19 +13,11 @@ alloc[t.a0] = {'balance': 100000 * utils.denoms.ether}
 # alloc[t.a1] = {'balance': 10**22}
 s = custom_chain(t, alloc, 9999999, 4707787, 2000000)
 
-EPOCH_LENGTH = casper_config["epoch_length"]
+EPOCH_LENGTH = casper_config['EPOCH_LENGTH']
 
-code_template = """
-~calldatacopy(0, 0, 128)
-~call(3000, 1, 0, 0, 128, 0, 32)
-return(~mload(0) == %s)
-"""
-
-def mk_validation_code(address):
-    return serpent.compile(code_template % (utils.checksum_encode(address)))
-
-# Install Casper, RLP decoder, purity checker, sighasher
 init_txs, casper_address = mk_initializers(casper_config, t.k0)
+print(utils.encode_hex(casper_address))
+
 for tx in init_txs:
     if s.head_state.gas_used + tx.startgas > s.head_state.gas_limit:
         s.mine(1)
@@ -33,26 +25,29 @@ for tx in init_txs:
 
 ct = abi.ContractTranslator(purity_checker_abi)
 # Check that the RLP decoding library and the sig hashing library are "pure"
-assert utils.big_endian_to_int(s.tx(t.k0, purity_checker_address, 0, ct.encode('submit', [viper_rlp_decoder_address]))) == 1
-assert utils.big_endian_to_int(s.tx(t.k0, purity_checker_address, 0, ct.encode('submit', [sig_hasher_address]))) == 1
-
+assert utils.big_endian_to_int(s._tx(t.k0, purity_checker_address, 0, ct.encode('submit', [viper_rlp_decoder_address]))) == 1
+assert utils.big_endian_to_int(s._tx(t.k0, purity_checker_address, 0, ct.encode('submit', [sig_hasher_address]))) == 1
 
 casper = t.ABIContract(s, casper_abi, casper_address)
 s.mine(1)
+exit(0)
+
+def mk_validation_code(address):
+    # The precompiled bytecode of the validation code which
+    # verifies EC signatures
+    validation_code_bytecode = b"a\x009\x80a\x00\x0e`\x009a\x00GV`\x80`\x00`\x007` "
+    validation_code_bytecode += b"`\x00`\x80`\x00`\x00`\x01a\x0b\xb8\xf1Ps"
+    validation_code_bytecode += address
+    validation_code_bytecode += b"`\x00Q\x14` R` ` \xf3[`\x00\xf3"
+    return validation_code_bytecode
 
 # Helper functions for making a prepare, commit, login and logout message
 
-def mk_prepare(validator_index, epoch, ancestry_hash, source_epoch, source_ancestry_hash, key):
-    sighash = utils.sha3(rlp.encode([validator_index, epoch, ancestry_hash, source_epoch, source_ancestry_hash]))
+def mk_vote(validator_index, target_hash, target_epoch, source_epoch, key):
+    sighash = utils.sha3(rlp.encode([validator_index, target_hash, target_epoch, source_epoch]))
     v, r, s = utils.ecdsa_raw_sign(sighash, key)
     sig = utils.encode_int32(v) + utils.encode_int32(r) + utils.encode_int32(s)
-    return rlp.encode([validator_index, epoch, ancestry_hash, source_epoch, source_ancestry_hash, sig])
-
-def mk_commit(validator_index, epoch, hash, prev_commit_epoch, key):
-    sighash = utils.sha3(rlp.encode([validator_index, epoch, hash, prev_commit_epoch]))
-    v, r, s = utils.ecdsa_raw_sign(sighash, key)
-    sig = utils.encode_int32(v) + utils.encode_int32(r) + utils.encode_int32(s)
-    return rlp.encode([validator_index, epoch, hash, prev_commit_epoch, sig])
+    return rlp.encode([validator_index, target_hash, target_epoch, source_epoch, sig])
 
 def mk_logout(validator_index, epoch, key):
     sighash = utils.sha3(rlp.encode([validator_index, epoch]))
@@ -60,10 +55,11 @@ def mk_logout(validator_index, epoch, key):
     sig = utils.encode_int32(v) + utils.encode_int32(r) + utils.encode_int32(s)
     return rlp.encode([validator_index, epoch, sig])
 
-def induct_validator(casper, key, value):
-    valcode_addr = s.tx(key, "", 0, mk_validation_code(utils.privtoaddr(key)))
-    assert utils.big_endian_to_int(s.tx(key, purity_checker_address, 0, ct.encode('submit', [valcode_addr]))) == 1
-    casper.deposit(valcode_addr, utils.privtoaddr(key), value=value)
+def induct_validator(chain, casper, key, value):
+    sender = utils.privtoaddr(key)
+    valcode_addr = chain.tx(key, "", 0, mk_validation_code(sender))
+    assert utils.big_endian_to_int(chain.tx(key, purity_checker_address, 0, purity_translator.encode('submit', [valcode_addr]))) == 1
+    casper.deposit(valcode_addr, sender, value=value)
 
 # Begin the test
 
@@ -73,6 +69,8 @@ current_dyn, _e, _a, _se, _sa = new_epoch(s, casper, EPOCH_LENGTH)
 assert casper.get_nextValidatorIndex() == 0
 assert casper.get_current_epoch() == 1
 print("Epoch initialized")
+
+exit(0)
 
 # Deposit one validator
 induct_validator(casper, t.k1, 200 * 10**18)
