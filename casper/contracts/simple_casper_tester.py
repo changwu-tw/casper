@@ -16,7 +16,6 @@ s = custom_chain(t, alloc, 9999999, 4707787, 2000000)
 EPOCH_LENGTH = casper_config['EPOCH_LENGTH']
 
 init_txs, casper_address = mk_initializers(casper_config, t.k0)
-print(utils.encode_hex(casper_address))
 
 for tx in init_txs:
     if s.head_state.gas_used + tx.startgas > s.head_state.gas_limit:
@@ -29,8 +28,9 @@ assert utils.big_endian_to_int(s._tx(t.k0, purity_checker_address, 0, ct.encode(
 assert utils.big_endian_to_int(s._tx(t.k0, purity_checker_address, 0, ct.encode('submit', [sig_hasher_address]))) == 1
 
 casper = t.ABIContract(s, casper_abi, casper_address)
+# ERROR: Block 2 (71a4e101) with parent 5893f44a invalid, reason: 'CASPER_ADDRESS'
 s.mine(1)
-exit(0)
+
 
 def mk_validation_code(address):
     # The precompiled bytecode of the validation code which
@@ -69,8 +69,6 @@ current_dyn, _e, _a, _se, _sa = new_epoch(s, casper, EPOCH_LENGTH)
 assert casper.get_nextValidatorIndex() == 0
 assert casper.get_current_epoch() == 1
 print("Epoch initialized")
-
-exit(0)
 
 # Deposit one validator
 induct_validator(casper, t.k1, 200 * 10**18)
